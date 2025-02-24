@@ -1,208 +1,426 @@
 import pygame
+import sys
 import random
 
+# Cấu hình cơ bản
+CELL_SIZE = 40
+BOARD_SIZE = 15  # Bàn cờ 15x15
+WIDTH = HEIGHT = CELL_SIZE * BOARD_SIZE
+LINE_COLOR = (0, 0, 0)
+BACKGROUND_COLOR = (255, 255, 255)
+PLAYER_COLOR = (200, 0, 0)   # Người chơi: X
+BOT_COLOR = (0, 0, 200)      # Bot hoặc Người chơi 2: O
+
+# Khởi tạo Pygame và font chữ
 pygame.init()
-pygame.mixer.init()  ## inp nhạc
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Game Caro")
+font = pygame.font.SysFont(None, 48)
 
-info = pygame.display.Info()  ## Lấy tt về size của man hinh
-WIDTH, HEIGHT = info.current_w, info.current_h
-screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
-pygame.display.set_caption("Game khong hay thi lay tien")
+# Khai báo biến bàn cờ toàn cục
+board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
 
-clock = pygame.time.Clock()  # Clock set_up, for fps
+# =====================================================
+# Các hàm hỗ trợ vẽ bàn cờ, kiểm tra thắng cuộc, đánh giá ô
 
-WHITE = (255, 255, 255)
-BLUE = (0, 0, 225)
-RED = (255, 0, 0)
-BLACK = (0, 0, 0)
-CYAN = (102, 255, 217)
+def draw_board(screen, board):
+    """Vẽ bàn cờ và các quân cờ."""
+    screen.fill(BACKGROUND_COLOR)
+    # Vẽ lưới
+    for x in range(BOARD_SIZE):
+        pygame.draw.line(screen, LINE_COLOR, (x * CELL_SIZE, 0), (x * CELL_SIZE, HEIGHT))
+    for y in range(BOARD_SIZE):
+        pygame.draw.line(screen, LINE_COLOR, (0, y * CELL_SIZE), (WIDTH, y * CELL_SIZE))
+    # Vẽ quân cờ
+    for i in range(BOARD_SIZE):
+        for j in range(BOARD_SIZE):
+            center = (j * CELL_SIZE + CELL_SIZE // 2, i * CELL_SIZE + CELL_SIZE // 2)
+            if board[i][j] == 1:
+                offset = CELL_SIZE // 3
+                pygame.draw.line(screen, PLAYER_COLOR, 
+                                 (center[0] - offset, center[1] - offset), 
+                                 (center[0] + offset, center[1] + offset), 3)
+                pygame.draw.line(screen, PLAYER_COLOR, 
+                                 (center[0] - offset, center[1] + offset), 
+                                 (center[0] + offset, center[1] - offset), 3)
+            elif board[i][j] == 2:
+                pygame.draw.circle(screen, BOT_COLOR, center, CELL_SIZE // 3, 3)
+    pygame.display.flip()
 
-cur = 0
-Score = 0
-Highest_score = 0
-Level = 1
-player_speed = 12
-player_size = 25
-player_x, player_y = WIDTH // 2, HEIGHT - player_size
-obstacle_speed = 10
-obstacle_size = 30
-num_of_obstacles = 12
+def check_win(board, player):
+    """Kiểm tra xem 'player' có 5 quân liên tiếp theo bất kỳ hướng nào không."""
+    for i in range(BOARD_SIZE):
+        for j in range(BOARD_SIZE):
+            if board[i][j] == player:
+                directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
+                for dx, dy in directions:
+                    count = 1
+                    x, y = i, j
+                    # Hướng dương
+                    while True:
+                        x += dx
+                        y += dy
+                        if 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE and board[x][y] == player:
+                            count += 1
+                        else:
+                            break
+                    x, y = i, j
+                    # Hướng ngược
+                    while True:
+                        x -= dx
+                        y -= dy
+                        if 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE and board[x][y] == player:
+                            count += 1
+                        else:
+                            break
+                    if count >= 5:
+                        return True
+    return False
 
-collision_sound = pygame.mixer.Sound('collision.mp3')
-dash = pygame.mixer.Sound('footstep.mp3')
-pygame.mixer.music.load('background.flac')
-pygame.mixer.music.play(-1) 
+def evaluate_direction(board, i, j, dx, dy, player):
+    """
+    Đánh giá số quân liên tiếp theo một hướng và đếm số đầu bị chặn.
+    Trả về: (count, block)
+    """
+    count = 0
+    block = 0
+    # Hướng tiến
+    x, y = i + dx, j + dy
+    while 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE:
+        if board[x][y] == player:
+            count += 1
+            x += dx
+            y += dy
+        elif board[x][y] == 0:
+            break
+        else:
+            block += 1
+            break
+    # Hướng lùi
+    x, y = i - dx, j - dy
+    while 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE:
+        if board[x][y] == player:
+            count += 1
+            x -= dx
+            y -= dy
+        elif board[x][y] == 0:
+            break
+        else:
+            block += 1
+            break
+    return count, block
 
-# Danh sách chứa các vị trí của nhân vật để tạo hiệu ứng trail
-trail = []
-max_trail_length = 15  # Số lượng điểm tối đa cho trail
+def get_pattern_score(count, block):
+    """Gán điểm cho pattern dựa trên số quân liên tiếp và số đầu bị chặn."""
+    if count >= 4:
+        return 10000
+    if count == 3:
+        if block == 0:
+            return 1000
+        elif block == 1:
+            return 100
+    if count == 2:
+        if block == 0:
+            return 100
+        elif block == 1:
+            return 10
+    if count == 1:
+        return 10
+    return 0
 
-# Các biến cho hiệu ứng explosion
-explosion_active = False
-explosion_counter = 0
-explosion_position = (0, 0)
+def evaluate_cell(board, i, j, player):
+    """Tính tổng điểm cho ô (i, j) theo 4 hướng."""
+    score = 0
+    directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
+    for dx, dy in directions:
+        count, block = evaluate_direction(board, i, j, dx, dy, player)
+        score += get_pattern_score(count, block)
+    return score
 
-# Hàm vẽ hiệu ứng explosion
-def draw_explosion(x, y, counter):
-    explosion_radius = counter * 3  # Tăng kích thước theo số frame
-    # Tạo surface hỗ trợ alpha
-    explosion_surface = pygame.Surface((explosion_radius * 2, explosion_radius * 2), pygame.SRCALPHA)
-    alpha = max(255 - counter * 10, 0)  # Giảm độ mờ theo thời gian
-    explosion_color = (255, 165, 0, alpha)  # Màu cam cho hiệu ứng nổ
-    pygame.draw.circle(explosion_surface, explosion_color, (explosion_radius, explosion_radius), explosion_radius)
-    screen.blit(explosion_surface, (x - explosion_radius, y - explosion_radius))
+# =====================================================
+# Các hàm cho Bot
 
-# Hàm tạo danh sách các obstacle
-def create_obstacles(num):
-    obstacles = []
-    for i in range(num):
-        obs = {
-            'x': random.randint(player_size, WIDTH - player_size),
-            'y': -obstacle_size,
-            'size': obstacle_size,
-            'speed': obstacle_speed
-        }
-        obstacles.append(obs)
-    return obstacles
+def heuristic_bot_move(board, multiplier):
+    """
+    Bot sử dụng chiến lược heuristic: tính điểm cho từng ô trống.
+    'multiplier' xác định mức độ ưu tiên chặn đối thủ.
+    """
+    best_score = -1
+    best_move = None
+    for i in range(BOARD_SIZE):
+        for j in range(BOARD_SIZE):
+            if board[i][j] == 0:
+                bot_score = evaluate_cell(board, i, j, 2)
+                human_score = evaluate_cell(board, i, j, 1)
+                total_score = bot_score + human_score * multiplier
+                if total_score > best_score:
+                    best_score = total_score
+                    best_move = (i, j)
+    if best_move:
+        board[best_move[0]][best_move[1]] = 2
 
-# Khởi tạo danh sách obstacles
-obstacles = create_obstacles(num_of_obstacles)
+def minimax_bot_move(board):
+    """
+    Bot độ khó "Siêu Siêu Khó": áp dụng lookahead 1 bước (minimax đơn giản).
+    Với mỗi nước đi, bot giả lập đáp trả của người chơi và lựa chọn nước đi tối ưu.
+    Sửa lỗi: khi tìm được nước thắng ngay, thoát ra ngay khỏi vòng lặp.
+    """
+    best_score = -float('inf')
+    best_move = None
+    found_winning_move = False
+    for i in range(BOARD_SIZE):
+        for j in range(BOARD_SIZE):
+            if board[i][j] == 0:
+                board[i][j] = 2
+                if check_win(board, 2):
+                    best_move = (i, j)
+                    found_winning_move = True
+                    board[i][j] = 0
+                    break  # Thoát vòng lặp trong
+                worst_response = float('inf')
+                for m in range(BOARD_SIZE):
+                    for n in range(BOARD_SIZE):
+                        if board[m][n] == 0:
+                            board[m][n] = 1
+                            if check_win(board, 1):
+                                response_score = -10000
+                            else:
+                                response_score = evaluate_cell(board, m, n, 2)
+                            worst_response = min(worst_response, response_score)
+                            board[m][n] = 0
+                candidate_score = evaluate_cell(board, i, j, 2) - worst_response
+                if candidate_score > best_score:
+                    best_score = candidate_score
+                    best_move = (i, j)
+                board[i][j] = 0
+        if found_winning_move:
+            break
+    if best_move:
+        board[best_move[0]][best_move[1]] = 2
 
-def Restart_game():
-    global player_x, player_y, obstacles, Score, trail, obstacle_speed, num_of_obstacles, Level, cur, explosion_active, explosion_counter
-    Score = 0
-    obstacle_speed = 10
-    num_of_obstacles = 12
-    Level = 1
-    cur = 0
-    player_x, player_y = WIDTH // 2, HEIGHT - player_size
-    obstacles = create_obstacles(num_of_obstacles)  # Tạo lại danh sách obstacles
-    trail = []  # Reset lại trail
-    explosion_active = False
-    explosion_counter = 0
+def bot_move(board, difficulty):
+    """Lựa chọn chiến lược bot dựa trên độ khó."""
+    if difficulty == 1:
+        heuristic_bot_move(board, 1.2)
+    elif difficulty == 2:
+        heuristic_bot_move(board, 1.5)
+    elif difficulty == 3:
+        minimax_bot_move(board)
 
-font = pygame.font.SysFont('Times New Roman', 40)
-def Draw_Text(text, color, x, y):
-    label = font.render(text, True, color)
-    screen.blit(label, (x, y))
+# =====================================================
+# Các hàm hiển thị thông báo và menu
 
-def Player():
-    global player_x, player_y
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_LEFT]:
-        player_x -= player_speed
-    if keys[pygame.K_RIGHT]:
-        player_x += player_speed
-    if keys[pygame.K_UP]:
-        player_y -= player_speed
-    if keys[pygame.K_DOWN]:
-        player_y += player_speed
+def show_message(text):
+    """Hiển thị thông báo ở giữa màn hình."""
+    text_surface = font.render(text, True, (0, 150, 0))
+    rect = text_surface.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+    screen.blit(text_surface, rect)
+    pygame.display.flip()
 
-    # Giới hạn chuyển động của player trong màn hình
-    if player_x < player_size:
-        player_x = player_size
-    if player_x > WIDTH - player_size:
-        player_x = WIDTH - player_size
-    if player_y < player_size:
-        player_y = player_size
-    if player_y > HEIGHT - player_size:
-        player_y = HEIGHT - player_size
-
-# Hàm riêng để vẽ trail cho nhân vật
-def draw_trail():
-    for i, pos in enumerate(trail):
-        alpha = int(255 * ((i + 1) / len(trail)))
-        temp_surface = pygame.Surface((player_size * 2, player_size * 2), pygame.SRCALPHA)
-        pygame.draw.circle(temp_surface, (CYAN[0], CYAN[1], CYAN[2], alpha), (player_size, player_size), player_size)
-        screen.blit(temp_surface, (pos[0] - player_size, pos[1] - player_size))
-
-running = True
-game_over = False
-
-while running:
-    screen.fill(WHITE)
-
-    # Nếu có hiệu ứng explosion đang hoạt động, xử lý riêng
-    if explosion_active:
-        draw_explosion(explosion_position[0], explosion_position[1], explosion_counter)
-        explosion_counter += 1
-        if explosion_counter > 30:  # Sau khi hiệu ứng hoàn thành, chuyển về trạng thái game over
-            explosion_active = False
-            game_over = True
-        pygame.display.flip()
-        clock.tick(60)
-        continue
-
-    if game_over:
-        # Xử lý sự kiện trong trạng thái game over
+def game_over_screen(message):
+    """
+    Màn hình kết thúc game: hiển thị thông báo và hướng dẫn.
+    Nhấn R: chơi lại | M: menu | Q: thoát.
+    """
+    draw_board(screen, board)
+    show_message(message)
+    instruction = "Nhấn R: chơi lại | M: menu | Q: thoát"
+    instr_surface = font.render(instruction, True, (0, 150, 0))
+    instr_rect = instr_surface.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 50))
+    screen.blit(instr_surface, instr_rect)
+    pygame.display.flip()
+    
+    while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
-        
-        Draw_Text("Làm lại thì nhấn R", BLACK, WIDTH // 3, HEIGHT // 5)
-        Draw_Text("Sợ quá thì bấm Q", BLACK, WIDTH // 3, HEIGHT // 4)
-        Draw_Text("Điểm: " + str(Score), BLACK, WIDTH // 3, HEIGHT // 2 - 100)
-        Draw_Text("Highscore " + str(Highest_score), BLACK, WIDTH // 3, HEIGHT // 2)
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    return "restart"
+                elif event.key == pygame.K_m:
+                    return "menu"
+                elif event.key == pygame.K_q:
+                    pygame.quit()
+                    sys.exit()
+
+def choose_mode_menu():
+    """
+    Menu chọn chế độ: 1 - Người vs Bot, 2 - Hai người chơi.
+    """
+    while True:
+        screen.fill(BACKGROUND_COLOR)
+        title = font.render("Chọn chế độ:", True, (0, 0, 0))
+        mode1 = font.render("1 - Người vs Bot", True, (0, 0, 0))
+        mode2 = font.render("2 - Hai người chơi", True, (0, 0, 0))
+        screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//2 - 100))
+        screen.blit(mode1, (WIDTH//2 - mode1.get_width()//2, HEIGHT//2 - 30))
+        screen.blit(mode2, (WIDTH//2 - mode2.get_width()//2, HEIGHT//2 + 10))
         pygame.display.flip()
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_r] or keys[pygame.K_SPACE]:
-            Restart_game()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    return "bot"
+                elif event.key == pygame.K_2:
+                    return "pvp"
+
+def start_difficulty_menu():
+    """
+    Menu chọn độ khó (chỉ áp dụng cho chế độ Người vs Bot):
+    1 - Vừa, 2 - Khó, 3 - Siêu Siêu Khó.
+    """
+    while True:
+        screen.fill(BACKGROUND_COLOR)
+        title = font.render("Chọn độ khó:", True, (0, 0, 0))
+        diff1 = font.render("1 - Vừa", True, (0, 0, 0))
+        diff2 = font.render("2 - Khó", True, (0, 0, 0))
+        diff3 = font.render("3 - Siêu Siêu Khó", True, (0, 0, 0))
+        screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//2 - 100))
+        screen.blit(diff1, (WIDTH//2 - diff1.get_width()//2, HEIGHT//2 - 30))
+        screen.blit(diff2, (WIDTH//2 - diff2.get_width()//2, HEIGHT//2 + 10))
+        screen.blit(diff3, (WIDTH//2 - diff3.get_width()//2, HEIGHT//2 + 50))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    return 1
+                elif event.key == pygame.K_2:
+                    return 2
+                elif event.key == pygame.K_3:
+                    return 3
+
+# =====================================================
+# Hàm chạy game theo từng chế độ
+
+def run_game_bot(difficulty):
+    """
+    Chế độ Người vs Bot.
+    Người chơi (X) bắt đầu, sau đó bot (O) đánh theo chiến lược đã chọn.
+    """
+    global board
+    board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+    game_over = False
+    player_turn = True  # Người chơi bắt đầu
+    while True:
+        draw_board(screen, board)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            # Cho phép chuyển về menu khi game đang chạy (nhấn M)
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_m:
+                    return "menu"
+            if event.type == pygame.MOUSEBUTTONDOWN and not game_over:
+                if player_turn:
+                    x, y = pygame.mouse.get_pos()
+                    col = x // CELL_SIZE
+                    row = y // CELL_SIZE
+                    if board[row][col] == 0:
+                        board[row][col] = 1
+                        if check_win(board, 1):
+                            draw_board(screen, board)
+                            result = game_over_screen("Người thắng!")
+                            if result == "menu":
+                                return "menu"
+                            board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                            game_over = False
+                            player_turn = True
+                        else:
+                            player_turn = False
+        # Lượt Bot
+        if not player_turn and not game_over:
+            pygame.time.delay(300)
+            bot_move(board, difficulty)
+            if check_win(board, 2):
+                draw_board(screen, board)
+                result = game_over_screen("Bot thắng!")
+                if result == "menu":
+                    return "menu"
+                board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                game_over = False
+                player_turn = True
+            else:
+                player_turn = True
+        # Kiểm tra hòa
+        if not game_over and all(board[i][j] != 0 for i in range(BOARD_SIZE) for j in range(BOARD_SIZE)):
+            draw_board(screen, board)
+            result = game_over_screen("Hòa!")
+            if result == "menu":
+                return "menu"
+            board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
             game_over = False
-        if keys[pygame.K_q]:
-            running = False
-        continue
+            player_turn = True
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+def run_game_pvp():
+    """
+    Chế độ Hai người chơi:
+    Người chơi 1 (X) và Người chơi 2 (O) thay phiên đánh.
+    """
+    global board
+    board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+    game_over = False
+    current_player = 1  # Người chơi 1 bắt đầu
+    while True:
+        draw_board(screen, board)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            # Cho phép chuyển về menu khi game đang chạy (nhấn M)
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_m:
+                    return "menu"
+            if event.type == pygame.MOUSEBUTTONDOWN and not game_over:
+                x, y = pygame.mouse.get_pos()
+                col = x // CELL_SIZE
+                row = y // CELL_SIZE
+                if board[row][col] == 0:
+                    board[row][col] = current_player
+                    if check_win(board, current_player):
+                        draw_board(screen, board)
+                        if current_player == 1:
+                            result = game_over_screen("Người chơi 1 thắng!")
+                        else:
+                            result = game_over_screen("Người chơi 2 thắng!")
+                        if result == "menu":
+                            return "menu"
+                        board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                        game_over = False
+                        current_player = 1
+                    else:
+                        current_player = 2 if current_player == 1 else 1
+        # Kiểm tra hòa
+        if not game_over and all(board[i][j] != 0 for i in range(BOARD_SIZE) for j in range(BOARD_SIZE)):
+            draw_board(screen, board)
+            result = game_over_screen("Hòa!")
+            if result == "menu":
+                return "menu"
+            board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+            game_over = False
+            current_player = 1
 
-    Player()
+# =====================================================
+# Hàm main
 
-    # Cập nhật danh sách trail
-    trail.append((player_x, player_y))
-    if len(trail) > max_trail_length:
-        trail.pop(0)
+def main():
+    while True:
+        mode = choose_mode_menu()  # Chọn chế độ: Người vs Bot hoặc PvP
+        if mode == "bot":
+            difficulty = start_difficulty_menu()
+            result = run_game_bot(difficulty)
+            if result == "menu":
+                continue
+        elif mode == "pvp":
+            result = run_game_pvp()
+            if result == "menu":
+                continue
 
-    # Vẽ trail trước để nó nằm sau nhân vật (với hiệu ứng mờ dần)
-    draw_trail()
-
-    # Cập nhật vị trí của các obstacle
-    for obs in obstacles:
-        obs['y'] += random.randint(1, obstacle_speed + 10)
-        if obs['y'] > HEIGHT:
-            obs['y'] = -obstacle_size
-            obs['x'] = random.randint(player_size, WIDTH - player_size)
-    Score += 1
-
-    if Score >= cur + 500:
-        cur += 500
-        Level += 1
-        obstacle_speed += 5
-        num_of_obstacles += 3
-        dash.play()
-
-    # Kiểm tra va chạm giữa player và các obstacle
-    player_box = pygame.Rect(player_x - player_size, player_y - player_size, player_size * 2, player_size * 2)
-    for obs in obstacles:
-        obs_box = pygame.Rect(obs['x'], obs['y'], obs['size'], obs['size'])
-        if player_box.colliderect(obs_box):
-            collision_sound.play()
-            # Kích hoạt hiệu ứng explosion thay vì chuyển game over ngay
-            explosion_active = True
-            explosion_counter = 0
-            explosion_position = (player_x, player_y)
-            Highest_score = max(Highest_score, Score)
-            break
-
-    Draw_Text("Điểm: " + str(Score), BLACK, 10, 10)
-    Draw_Text("Level: " + str(Level), BLACK, WIDTH // 2 + 20, 10)
-
-    # Vẽ player và các obstacle
-    pygame.draw.circle(screen, BLUE, (player_x, player_y), player_size)
-    for obs in obstacles:
-        pygame.draw.rect(screen, RED, (obs['x'], obs['y'], obs['size'], obs['size']))
-
-    pygame.display.flip()
-    clock.tick(60)
-
-pygame.quit()
+if __name__ == "__main__":
+    main()
