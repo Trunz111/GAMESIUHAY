@@ -11,6 +11,9 @@ BACKGROUND_COLOR = (255, 255, 255)
 PLAYER_COLOR = (200, 0, 0)   # Người chơi: X
 BOT_COLOR = (0, 0, 200)      # Bot hoặc Người chơi 2: O
 
+# Giới hạn độ sâu cho thuật toán Minimax
+MAX_DEPTH = 2  # Điều chỉnh sao cho cân bằng giữa tốc độ và chất lượng
+
 # Khởi tạo Pygame và font chữ
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -56,7 +59,7 @@ def check_win(board, player):
                 for dx, dy in directions:
                     count = 1
                     x, y = i, j
-                    # Hướng dương
+                    # Hướng tiến
                     while True:
                         x += dx
                         y += dy
@@ -137,6 +140,17 @@ def evaluate_cell(board, i, j, player):
         score += get_pattern_score(count, block)
     return score
 
+def evaluate_board(board):
+    """Đánh giá trạng thái bàn cờ từ góc nhìn của bot."""
+    score = 0
+    for i in range(BOARD_SIZE):
+        for j in range(BOARD_SIZE):
+            if board[i][j] == 2:
+                score += evaluate_cell(board, i, j, 2)
+            elif board[i][j] == 1:
+                score -= evaluate_cell(board, i, j, 1)
+    return score
+
 # =====================================================
 # Các hàm cho Bot
 
@@ -159,42 +173,77 @@ def heuristic_bot_move(board, multiplier):
     if best_move:
         board[best_move[0]][best_move[1]] = 2
 
-def minimax_bot_move(board):
+def get_valid_moves(board, distance=1):
     """
-    Bot độ khó "Siêu Siêu Khó": áp dụng lookahead 1 bước (minimax đơn giản).
-    Với mỗi nước đi, bot giả lập đáp trả của người chơi và lựa chọn nước đi tối ưu.
-    Sửa lỗi: khi tìm được nước thắng ngay, thoát ra ngay khỏi vòng lặp.
+    Lấy danh sách các nước đi khả thi:
+    Chỉ xét các ô trống nằm trong khoảng cách 'distance' từ các quân cờ đã đánh.
+    Nếu bàn cờ chưa có nước đi nào, trả về ô trung tâm.
     """
-    best_score = -float('inf')
-    best_move = None
-    found_winning_move = False
+    moves = set()
     for i in range(BOARD_SIZE):
         for j in range(BOARD_SIZE):
-            if board[i][j] == 0:
-                board[i][j] = 2
-                if check_win(board, 2):
-                    best_move = (i, j)
-                    found_winning_move = True
-                    board[i][j] = 0
-                    break  # Thoát vòng lặp trong
-                worst_response = float('inf')
-                for m in range(BOARD_SIZE):
-                    for n in range(BOARD_SIZE):
-                        if board[m][n] == 0:
-                            board[m][n] = 1
-                            if check_win(board, 1):
-                                response_score = -10000
-                            else:
-                                response_score = evaluate_cell(board, m, n, 2)
-                            worst_response = min(worst_response, response_score)
-                            board[m][n] = 0
-                candidate_score = evaluate_cell(board, i, j, 2) - worst_response
-                if candidate_score > best_score:
-                    best_score = candidate_score
-                    best_move = (i, j)
-                board[i][j] = 0
-        if found_winning_move:
-            break
+            if board[i][j] != 0:
+                for dx in range(-distance, distance+1):
+                    for dy in range(-distance, distance+1):
+                        x = i + dx
+                        y = j + dy
+                        if 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE and board[x][y] == 0:
+                            moves.add((x, y))
+    if not moves:
+        moves.add((BOARD_SIZE//2, BOARD_SIZE//2))
+    return list(moves)
+
+def minimax(board, depth, is_maximizing, alpha, beta):
+    """Hàm minimax có cắt tỉa alpha-beta với giới hạn độ sâu và chỉ duyệt nước đi khả thi."""
+    # Trạng thái terminal
+    if check_win(board, 2):
+        return 10000 - depth  # Ưu tiên thắng sớm
+    if check_win(board, 1):
+        return -10000 + depth
+    if all(board[i][j] != 0 for i in range(BOARD_SIZE) for j in range(BOARD_SIZE)):
+        return 0
+
+    # Giới hạn độ sâu
+    if depth >= MAX_DEPTH:
+        return evaluate_board(board)
+
+    valid_moves = get_valid_moves(board, distance=1)  # Chỉ xét các nước đi gần quân cờ hiện có
+
+    if is_maximizing:
+        best_score = -float('inf')
+        for i, j in valid_moves:
+            board[i][j] = 2
+            score = minimax(board, depth + 1, False, alpha, beta)
+            board[i][j] = 0  # Undo move
+            best_score = max(best_score, score)
+            alpha = max(alpha, score)
+            if beta <= alpha:
+                break  # Cắt tỉa
+        return best_score
+    else:
+        worst_score = float('inf')
+        for i, j in valid_moves:
+            board[i][j] = 1
+            score = minimax(board, depth + 1, True, alpha, beta)
+            board[i][j] = 0  # Undo move
+            worst_score = min(worst_score, score)
+            beta = min(beta, score)
+            if beta <= alpha:
+                break  # Cắt tỉa
+        return worst_score
+
+def minimax_bot_move(board):
+    """Tìm nước đi tốt nhất cho bot dựa trên thuật toán Minimax."""
+    best_score = -float('inf')
+    best_move = None
+    valid_moves = get_valid_moves(board, distance=1)
+    for i, j in valid_moves:
+        board[i][j] = 2
+        score = minimax(board, 0, False, -float('inf'), float('inf'))
+        board[i][j] = 0  # Undo move
+        if score > best_score:
+            best_score = score
+            best_move = (i, j)
     if best_move:
         board[best_move[0]][best_move[1]] = 2
 
