@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cesium Việt Nam – Dân số & Thành phố</title>
+  <script src="https://cdn.jsdelivr.net/npm/cesium/Build/Cesium/Cesium.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/cesium/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
+  <style>
+    #cesiumContainer {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+
+  <script>
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+    });
+
+    viewer.scene.screenSpaceCameraController.minimumZoomDistance = 200;
+    viewer.scene.screenSpaceCameraController.maximumZoomDistance = 50000000;
+
+    viewer.camera.setView({
+      destination: Cesium.Rectangle.fromDegrees(102, 8, 114, 24),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch: Cesium.Math.toRadians(-90),
+        roll: 0
+      }
+    });
+
+    Cesium.GeoJsonDataSource.load('./VN_provinces.json', {
+      stroke: Cesium.Color.YELLOW,
+
+      strokeWidth: 2,
+      clampToGround: false
+    }).then(dataSource => {
+      viewer.dataSources.add(dataSource);
+      const entities = dataSource.entities.values;
+
+      for (let i = 0; i < entities.length; i++) {
+        const entity = entities[i];
+        if (entity.polygon) {
+          entity.polygon.height = 0;
+          entity.polygon.outline = true;
+          entity.polygon.outlineColor = Cesium.Color.YELLOW;
+
+
+
+          // Tính tâm tỉnh
+          const hierarchy = entity.polygon.hierarchy.getValue(Cesium.JulianDate.now());
+          const positions = hierarchy.positions;
+          const rectangle = Cesium.Rectangle.fromCartesianArray(positions);
+          const center = Cesium.Rectangle.center(rectangle);
+          const lonCentroid = Cesium.Math.toDegrees(center.longitude);
+          const latCentroid = Cesium.Math.toDegrees(center.latitude);
+
+          // Label tỉnh
+          viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(lonCentroid, latCentroid),
+            label: {
+              text: entity.properties.name || entity.properties.NAME_1 || '???',
+              font: '16px sans-serif',
+              fillColor: Cesium.Color.BLACK,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              verticalOrigin: Cesium.VerticalOrigin.CENTER,
+              show: false,
+              scaleByDistance: new Cesium.NearFarScalar(500000, 1.0, 1500000, 0.0)
+            }
+          });
+        }
+      }
+
+      // 🎯 Marker các thành phố lớn
+      const majorCities = [
+        { name: "Hà Nội", lon: 105.8544, lat: 21.0285 },
+        { name: "TP.HCM", lon: 106.6297, lat: 10.8231 },
+        { name: "Đà Nẵng", lon: 108.2022, lat: 16.0471 },
+        { name: "Hải Phòng", lon: 106.6823, lat: 20.8449 },
+        { name: "Cần Thơ", lon: 105.7689, lat: 10.0452 },
+        { name: "Huế", lon: 107.5800, lat: 16.4637 },
+      ];
+
+      majorCities.forEach(city => {
+        viewer.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(city.lon, city.lat),
+          point: {
+            pixelSize: 10,
+            color: Cesium.Color.RED,
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 2,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+          },
+          label: {
+            text: city.name,
+            font: "14px sans-serif",
+            fillColor: Cesium.Color.BLUE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -15),
+            scaleByDistance: new Cesium.NearFarScalar(500000, 1.0, 1500000, 0.0)
+          }
+        });
+      });
+
+      // 🇻🇳 Label lớn VIỆT NAM khi zoom xa
+      const vietnamLabel = viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(107, 16),
+        label: {
+          text: "VIỆT NAM",
+          font: "bold 30px sans-serif",
+          fillColor: Cesium.Color.BLACK,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          heightReference: Cesium.HeightReference.NONE,
+          show: true
+        }
+      });
+
+      // 🎯 Cập nhật hiện/ẩn label
+      function updateLabels() {
+        const cameraHeight = viewer.camera.positionCartographic.height;
+        const showProvinceLabels = cameraHeight < 500000;
+        const showVietnamLabel = cameraHeight >= 500000;
+
+        viewer.entities.values.forEach(entity => {
+          if (entity.label && entity.label.text.getValue() !== "VIỆT NAM") {
+            entity.label.show = showProvinceLabels;
+          }
+        });
+
+        vietnamLabel.label.show = showVietnamLabel;
+      }
+
+      viewer.camera.changed.addEventListener(updateLabels);
+      updateLabels();
+
+    }).catch(err => {
+      console.error('❌ Lỗi tải GeoJSON:', err);
+    });
+  </script>
+</body>
+</html>
+
